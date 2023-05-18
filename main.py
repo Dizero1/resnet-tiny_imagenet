@@ -20,7 +20,7 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
-# python main.py -a ressnet18 C:\Users\chengley\resnet-tiny_imagenet\tiny-imagenet-200
+# python main.py -a resnet18 C:\Users\chengley\resnet-tiny_imagenet\tiny-imagenet-200 -b 64
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
@@ -225,8 +225,8 @@ def main_worker(gpu, ngpus_per_node, args):
     # Data loading code
     if args.dummy:
         print("=> Dummy data is used!")
-        train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
-        val_dataset = datasets.FakeData(50000, (3, 224, 224), 1000, transforms.ToTensor())
+        train_dataset = datasets.FakeData(1281, (3, 224, 224), 10, transforms.ToTensor())
+        val_dataset = datasets.FakeData(50, (3, 224, 224), 10, transforms.ToTensor())
     else:
         traindir = os.path.join(args.data, 'train')
         valdir = os.path.join(args.data, 'val')
