@@ -20,7 +20,8 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
-# python main.py -a resnet18 C:\Users\chengley\resnet-tiny_imagenet\tiny-imagenet-200 -b 64
+# https://github.com/pytorch/examples/blob/main/imagenet/main.py
+# python main.py -a resnet18 C:\Users\chengley\resnet-tiny_imagenet\tiny-imagenet-200 -b 64 --resume C:\Users\chengley\resnet-tiny_imagenet\checkpoint.pth.tar
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
@@ -236,7 +237,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset = datasets.ImageFolder(
             traindir,
             transforms.Compose([
-                transforms.RandomResizedCrop(224),
+                transforms.RandomResizedCrop(64),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 normalize,
@@ -245,8 +246,8 @@ def main_worker(gpu, ngpus_per_node, args):
         val_dataset = datasets.ImageFolder(
             valdir,
             transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
+                transforms.Resize(64),
+                transforms.CenterCrop(64),
                 transforms.ToTensor(),
                 normalize,
             ]))
