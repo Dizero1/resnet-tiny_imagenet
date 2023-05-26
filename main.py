@@ -252,6 +252,35 @@ def main_worker(gpu, ngpus_per_node, args):
                 transforms.ToTensor(),
                 normalize,
             ]))
+        if args.data[-17:] == 'tiny-imagenet-200':
+            with open(os.path.join(args.data, 'wnids.txt'), 'r') as f:
+                wnids = f.read().strip().split('\n')
+            class_to_idx = {w:id for id,w in enumerate(wnids)}
+
+            # train_dataset
+            self = train_dataset
+            samples = self.make_dataset(self.root, class_to_idx, self.extensions)
+            self.class_to_idx = class_to_idx
+            self.samples = samples
+            self.targets = [s[1] for s in samples]
+            # val_dataset
+            self = val_dataset
+            with open(os.path.join(valdir, 'val_annotations.txt'), 'r') as f:
+                infos = f.read().strip().split('\n')
+                infos = [info.strip().split('\t')[:2] for info in infos]
+            root = os.path.join(valdir,'images')
+            instances = []
+            classes = []
+            for [fname,target_class] in infos:
+                classes =list(set(classes) | {target_class})
+                path = os.path.join(root, fname)
+                class_index = class_to_idx[target_class]
+                instances.append((path, class_index))
+            samples = instances
+            self.classes = classes
+            self.class_to_idx = class_to_idx
+            self.samples = samples
+            self.targets = [s[1] for s in samples]
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
