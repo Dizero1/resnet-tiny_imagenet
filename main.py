@@ -144,6 +144,7 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
+        model.fc = nn.Linear(512,200)
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
         print('using CPU, this will be slow')
@@ -226,8 +227,8 @@ def main_worker(gpu, ngpus_per_node, args):
     # Data loading code
     if args.dummy:
         print("=> Dummy data is used!")
-        train_dataset = datasets.FakeData(1281, (3, 224, 224), 10, transforms.ToTensor())
-        val_dataset = datasets.FakeData(50, (3, 224, 224), 10, transforms.ToTensor())
+        train_dataset = datasets.FakeData(1281, (3, 64, 64), 10, transforms.ToTensor())
+        val_dataset = datasets.FakeData(500, (3, 64, 64), 10, transforms.ToTensor())
     else:
         traindir = os.path.join(args.data, 'train')
         valdir = os.path.join(args.data, 'val')
