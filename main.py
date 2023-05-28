@@ -5,13 +5,17 @@ import shutil
 import time
 import warnings
 from enum import Enum
+import matplotlib.pyplot as plt
+import numpy as np
 
 import torch
+import torchvision
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.nn.parallel
+import torch.nn.functional as F
 import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
@@ -20,11 +24,16 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
+from torch.utils.tensorboard import SummaryWriter
+# tensorboard --logdir C:\Users\chengley\resnet-tiny_imagenet\runs 只能用绝对路径:(
 # https://github.com/pytorch/examples/blob/main/imagenet/main.py
 # python main.py -a resnet18 C:\Users\chengley\resnet-tiny_imagenet\tiny-imagenet-200 -b 64 --resume C:\Users\chengley\resnet-tiny_imagenet\checkpoint.pth.tar
+# python main.py -a resnet18 .\tiny-imagenet-200 -b 64 --resume .\checkpoint.pth.tar
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
+idx_to_class = {}
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR', nargs='?', default='imagenet',
@@ -78,9 +87,11 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 parser.add_argument('--dummy', action='store_true', help="use fake data to benchmark")
+parser.add_argument('--tensorboard',default='True', action='store_true', help="tensorboard model")
 
 best_acc1 = 0
-
+writer = SummaryWriter('runs/TI2_resnet18')
+running_loss = 0
 
 def main():
     args = parser.parse_args()
@@ -223,12 +234,12 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-
+    
     # Data loading code
     if args.dummy:
         print("=> Dummy data is used!")
-        train_dataset = datasets.FakeData(1281, (3, 64, 64), 10, transforms.ToTensor())
-        val_dataset = datasets.FakeData(500, (3, 64, 64), 10, transforms.ToTensor())
+        train_dataset = datasets.FakeData(10000, (3, 64, 64), 10, transforms.ToTensor())
+        val_dataset = datasets.FakeData(1000, (3, 64, 64), 10, transforms.ToTensor())
     else:
         traindir = os.path.join(args.data, 'train')
         valdir = os.path.join(args.data, 'val')
@@ -247,16 +258,14 @@ def main_worker(gpu, ngpus_per_node, args):
         val_dataset = datasets.ImageFolder(
             valdir,
             transforms.Compose([
-                transforms.Resize(64),
-                transforms.CenterCrop(64),
                 transforms.ToTensor(),
                 normalize,
             ]))
+        
         if args.data[-17:] == 'tiny-imagenet-200':
             with open(os.path.join(args.data, 'wnids.txt'), 'r') as f:
                 wnids = f.read().strip().split('\n')
             class_to_idx = {w:id for id,w in enumerate(wnids)}
-
             # train_dataset
             self = train_dataset
             samples = self.make_dataset(self.root, class_to_idx, self.extensions)
@@ -281,7 +290,9 @@ def main_worker(gpu, ngpus_per_node, args):
             self.class_to_idx = class_to_idx
             self.samples = samples
             self.targets = [s[1] for s in samples]
-
+            global idx_to_class
+            idx_to_class = {class_to_idx[cs]:cs for cs in classes}
+    
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False, drop_last=True)
@@ -298,8 +309,21 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=val_sampler)
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        validate(val_loader, epoch, model, criterion, args)
         return
+
+    if args.tensorboard:
+        dataiter = iter(train_loader)
+        print('Tensorboard activatable')
+        images, labels = next(dataiter)
+        images = images[:4]
+        img_grid = torchvision.utils.make_grid(images)
+        matplotlib_imshow(img_grid, one_channel=True)
+        writer.add_image('four_images', img_grid)
+        writer.add_graph(model, images)
+        writer.flush()
+    else:
+        writer.close()  
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -309,7 +333,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, device, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+        acc1 = validate(val_loader, epoch, model, criterion, args)
         
         scheduler.step()
         
@@ -370,12 +394,30 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
+        global running_loss
+        running_loss += loss.item()
+        if i % 100 == 1:  
+        # ...log the running loss
+            writer.add_scalar('training loss',
+                            running_loss / 100,
+                            epoch * len(train_loader) + i)
+            writer.add_scalar('acc5_avg',
+                            top5.avg,
+                            epoch * len(train_loader) + i)
 
+            # ...log a Matplotlib Figure showing the model's predictions on a
+            # random mini-batch
+            writer.add_figure('predictions vs. actuals',
+                            plot_classes_preds(model, images, target),
+                            global_step=epoch * len(train_loader) + i)
+            running_loss = 0.0
+            writer.flush()
         if i % args.print_freq == 0:
             progress.display(i + 1)
+        writer.close()
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, epoch, model, criterion, args):
 
     def run_validate(loader, base_progress=0):
         with torch.no_grad():
@@ -433,7 +475,8 @@ def validate(val_loader, model, criterion, args):
         run_validate(aux_val_loader, len(val_loader))
 
     progress.display_summary()
-
+    writer.add_scalar('test loss', losses.avg, epoch)
+    writer.add_scalar('test acc5', top5.avg, epoch)
     return top1.avg
 
 
@@ -537,6 +580,48 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
+def matplotlib_imshow(img, one_channel=False):
+    if one_channel:
+        img = img.mean(dim=0)
+    # img = img / 2 + 0.5     # unnormalize
+    npimg = img.cpu().numpy()
+    if one_channel:
+        plt.imshow(npimg, cmap="Greys")
+    else:
+        plt.imshow(np.transpose(npimg, (1, 2, 0)))
+
+# helper functions
+def images_to_probs(model, images):
+    '''
+    Generates predictions and corresponding probabilities from a trained
+    network and a list of images
+    '''
+    output = model(images)
+    # convert output probabilities to predicted class
+    _, preds_tensor = torch.max(output, 1)
+    preds = np.squeeze(preds_tensor.cpu().numpy())
+    return preds, [F.softmax(el, dim=0)[i].item() for i, el in zip(preds, output)]
+
+def plot_classes_preds(model, images, target):
+    '''
+    Generates matplotlib Figure using a trained network, along with images
+    and labels from a batch, that shows the network's top prediction along
+    with its probability, alongside the actual label, coloring this
+    information based on whether the prediction was correct or not.
+    Uses the "images_to_probs" function.
+    '''
+    preds, probs = images_to_probs(model, images)
+    # plot the images in the batch, along with predicted and true labels
+    fig = plt.figure(figsize=(12, 3))
+    for idx in np.arange(4):
+        ax = fig.add_subplot(1, 4, idx+1, xticks=[], yticks=[])
+        matplotlib_imshow(images[idx], one_channel=True)
+        ax.set_title("{0}, {1:.1f}%\n(label: {2})".format(
+            idx_to_class[preds[idx]],
+            probs[idx] * 100.0,
+            idx_to_class[target[idx].item()]),
+                color=("green" if preds[idx]==target[idx].item() else "red"))
+    return fig
 
 if __name__ == '__main__':
     main()
